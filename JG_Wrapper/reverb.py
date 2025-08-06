@@ -233,7 +233,7 @@ def make_some_noise(M,N,L1,L2,lat,dec,N_times,dnu,dt,SEFD,eta,freq,imsize,cellsi
     maggy = grid(pos,magni,imsize,cellsize_deg*60)
     noise = gen_noise_image(maggy)
 
-    return noise.T*len(maggy.ravel())/M/N/(M*N-1)/N_times
+    return noise.T*len(maggy.ravel())/M/N/(M*N-1)/N_times/np.sqrt(2)
 
 def sightread(npzfile,noisefile = None,beamfile = None):
 
@@ -314,7 +314,10 @@ def writetofits(name,wcs,dmap,noise=None,beam=None):
 
     header = wcs.to_header()
     hdul = []
-    dirtymap = np.transpose(dmap,(2,0,1))
+    if len(dmap.shape) == 3:
+        dirtymap = np.transpose(dmap,(2,0,1))
+    elif len(dmap.shape) == 4:
+        dirtymap = np.transpose(dmap,(3,0,1,2))
     hdul.append(fits.PrimaryHDU(header=header))
     hdul.append(fits.ImageHDU(header=header,data=dirtymap,name = 'dirtymap'))
     if np.any(noise):
@@ -329,6 +332,58 @@ def writetofits(name,wcs,dmap,noise=None,beam=None):
         hdul.append(fits.ImageHDU(header=header,data=beammap,name = 'beam'))
     if np.any(noise) & np.any(beam):
         dmap_noise_pbcor = np.transpose((dmap+noise)/beam,(2,0,1))
+        hdul.append(fits.ImageHDU(header=header,data=dmap_noise_pbcor,name = 'dirtymap_noise_pbcor'))
+
+    hdul = fits.HDUList(hdul)
+    
+    if name[-5:] == '.fits':
+        hdul.writeto(name)
+    else:
+        hdul.writeto(name+'.fits')
+
+def writetofits_4D(name,wcs,dmap,noise=None,beam=None):
+
+    '''
+    Write the dirtymap, plus noise and beam if provided, to a .fits file containing versions of the data that have been combined with noise, and the beam, or not.
+
+    parameters:
+
+    name: string; this will be the name of the .fits file
+
+    wcs: the world coordinate system object that will be embedded in the .fits file
+
+    dmap: the output dirtymap 
+
+    noise (default none): the noise map
+
+    beam (default none): the primary (A) beam
+    '''
+
+    header = wcs.to_header()
+    hdul = []
+    hdul.append(fits.PrimaryHDU(header=header))
+    dirtymap = np.transpose(dmap,(3,2,0,1))
+    hdul.append(fits.ImageHDU(header=header,data=dirtymap,name = 'dirtymap'))
+    if np.any(noise):
+        noisemap = np.transpose(noise,(3,2,0,1))
+        dmap_noise = np.copy(dmap)
+        dmap_noise = dmap + noise
+        dmap_noise = np.transpose(dmap_noise,(3,2,0,1))
+        hdul.append(fits.ImageHDU(header=header,data=dmap_noise,name = 'dirtymap+noise'))
+        hdul.append(fits.ImageHDU(header=header,data=noisemap,name = 'noise'))
+    if np.any(beam):
+        beammap = np.transpose(beam,(2,0,1))
+        dmap_pbcor = np.copy(dmap)
+        for i in range(len(dmap[0][0])):
+            dmap_pbcor[:,:,i,:] = dmap[:,:,i,:]/beam
+        dmap_pbcor = np.transpose(dmap_pbcor,(3,2,0,1))
+        hdul.append(fits.ImageHDU(header=header,data=dmap_pbcor,name = 'dirtymap_pbcor'))
+        hdul.append(fits.ImageHDU(header=header,data=beammap,name = 'beam'))
+    if np.any(noise) & np.any(beam):
+        dmap_noise_pbcor = np.copy(dmap)
+        for i in range(len(dmap[0][0])):
+            dmap_noise_pbcor[:,:,i,:] = (dmap[:,:,i,:] + noise[:,:,i,:])/beam
+        dmap_noise_pbcor = np.transpose(dmap_noise_pbcor,(3,2,0,1))
         hdul.append(fits.ImageHDU(header=header,data=dmap_noise_pbcor,name = 'dirtymap_noise_pbcor'))
 
     hdul = fits.HDUList(hdul)
@@ -499,3 +554,123 @@ def get_spectra(frequencies,F,s):
     spectra = spec_cofac*F_array
 
     return spectra
+
+def assign_variability(ListOrNumber, bins, probs, varlength = 300):
+
+    if isinstance(ListOrNumber,int):
+        length = ListOrNumber         #### this chunk finds the number of variabilities and indices to generate
+    else:
+        length = len(ListOrNumber)
+
+    bounds = np.cumsum(probs)
+
+    outcomes = []
+    
+    bounds = np.cumsum(probs)
+    bounds = np.concatenate((np.array([0]),bounds)) ## bounds sets the intervals where a random (0,1) float falls
+                                                    ## so values can be drawn with the specified probability
+    
+    for i in range(length):
+        trial = np.random.rand()
+        for j in range(len(bins)):
+            if (trial>bounds[j]) & (trial<bounds[j+1]):
+                outcomes.append(bins[j])
+
+    variability_fractions = np.array(outcomes)
+
+    variability_indices = np.random.randint(0,varlength,length)
+
+    variability_starts = np.random.randint(1,7300,length)
+
+    return variability_indices,variability_fractions,variability_starts
+
+def get_density(density_coeff,F1_mJy,F2_mJy):
+
+    return density_coeff*(F1_mJy**-0.85-F2_mJy**-0.85)
+
+def spec_idx_dist(x):
+
+    a = 4.3
+    b = 1.6
+
+    xp = x.copy()
+    y = 0*x.copy()
+    xp[x<-0.6] = 4.3*(x[x<-0.6]+0.6)-0.6
+    xp[x>=-0.6] = 1.6*(x[x>=-0.6]+0.6)-0.6
+
+    N = np.sqrt(2)*a*b/np.sqrt(np.pi)/(a+b)
+
+    return N*np.exp(-0.5*(xp+0.6)**2)
+
+def gen_spectral_indices(N):
+
+    a = 4.3
+    b = 1.6
+    
+    spec_idxs = np.array([])
+    
+    integral = np.sqrt(2)*a*b/np.sqrt(np.pi)/(a+b)
+    
+    while len(spec_idxs) < N:
+        X = 3.5*np.random.rand(N)-1.5
+        Z = np.random.rand(N)
+        keep = Z < spec_idx_dist(X)/integral
+        spec_idxs = np.concatenate((spec_idxs,X[keep]))
+    spec_idxs = spec_idxs[:N]
+
+    return spec_idxs
+
+def gen_faint_background(density_coeff,density_index,F1_mJy,F2_mJy,phi1,phi2,theta1,theta2,frequencies):
+
+    density = get_density(density_coeff,F1_mJy,F2_mJy) ## per degree squared
+    
+    omega = (180/np.pi)**2*(np.deg2rad(phi2)-np.deg2rad(phi1))*(np.sin(np.deg2rad(theta2))-np.sin(np.deg2rad(theta1))) ## square degrees
+    
+    N = int(omega*density)
+    
+    phi = []
+    theta = []
+    F = []
+    
+    while len(phi) < N:
+            
+        phis = phi1+(phi2-phi1)*np.random.rand(N)
+        thetas = theta1+(theta2-theta1)*np.random.rand(N)
+        costhetas = np.cos(np.deg2rad(thetas))
+        costhetas_norm = costhetas/np.max(costhetas)
+        condition = np.random.rand(N) < costhetas_norm
+        phis_inc = phis[condition]
+        thetas_inc = thetas[condition]
+        phi += list(phis_inc)
+        theta += list(thetas_inc)
+    
+    while len(F) < N:
+    
+        Flux = F1_mJy+(F2_mJy-F1_mJy)*np.random.rand(N)
+        pdf = Flux**(-1.85)
+        pdf_norm = pdf / np.max(pdf)
+        condition = np.random.rand(N) < pdf_norm
+        Flux_inc = Flux[condition]/1000 ## divide by 1000 because we generated using mJy
+        F += list(Flux_inc)
+    
+    dec = np.array(theta[:N])
+    ra = np.array(phi[:N])
+    F = np.array(F[:N])
+    s = gen_spectral_indices(N)
+
+    u = u_vec(ra,dec)
+    spectra = get_spectra(frequencies,F,s)
+
+    return u,spectra
+
+def apply_variability(spectra,T_in_days,varlib,inds,starts,fracs):
+
+    new_spectra = spectra.copy()
+
+    for i in range(len(spectra)):
+
+        tseries = np.roll(varlib[inds[i]],starts[i])
+
+        new_spectra[i] *= (1+fracs[i]*varlib[inds[i]][T_in_days])
+
+    return new_spectra
