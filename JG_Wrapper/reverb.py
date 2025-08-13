@@ -62,7 +62,7 @@ def Antenna_positions_cartbasis(positions_ground_basis,long,lat):
 
     return positions
 
-def Visibility_noise(antenna_positions,s0,M,N,N_times,dnu,dt,SEFD = 6000,eta = 1,freq = 1e9):
+def Visibility_noise(antenna_positions,s0,M,N,dnu,dt,SEFD = 6000,eta = 1,freq = 1e9):
 
     l_hat = cross(s0,np.array([0,0,1]))
     l_hat = l_hat/mag(l_hat)
@@ -218,22 +218,28 @@ def make_some_noise(M,N,L1,L2,lat,dec,N_times,dnu,dt,SEFD,eta,freq,imsize,cellsi
     s0 = np.array([np.cos(dec*np.pi/180),0,np.sin(dec*np.pi/180)])
     
     antennae = Antenna_positions_cartbasis(antennae,0,lat)
-    pos = []
-    magni = []
-    for i in range(N_times):
-        Delta_t_days = (-(N_times-1)/2+i)*(dt/86400)
-        antenna_positions_shifted = Antenna_Positions_ForwardinTime(antennae,Delta_t_days)
-        pos_new,magni_new = Visibility_noise(antenna_positions_shifted,s0,M,N,N_times = N_times,dnu=dnu,dt=dt,SEFD = SEFD,eta = eta,freq = freq)
-        for j in range(len(pos_new)):
-            pos.append(pos_new[j])
-        for k in range(len(magni_new)):
-            magni.append(magni_new[k])
-    pos = np.array(pos)
-    magni = np.array(magni)
+    pos,magni = Visibility_noise(antennaeA_beam,B_beam = rev.recover_net_beam(u, centre_phi_RA_deg, initial_phi_offset, dphi, N_times, frequencies, survey_dec, antenna_diam = ant_diam),s0,M,N,dnu=dnu,dt=dt,SEFD = SEFD,eta = eta,freq = freq)
     maggy = grid(pos,magni,imsize,cellsize_deg*60)
     noise = gen_noise_image(maggy)
 
-    return noise.T*len(maggy.ravel())/M/N/(M*N-1)/N_times/np.sqrt(2)
+    return noise.T*len(maggy.ravel())/M/N/(M*N-1)/np.sqrt(2)
+
+def normalize(dirtymap,noise,A_beam,frequencies,M,N,beamthresh = 0.25):
+
+    dirtymap/=M**2
+    dirtymap/=N**2 ## necessary for normalization
+
+    for i in range(len(frequencies)):
+
+        beammax = np.max(A_beam[:,:,i])
+        noise[:,:,i] *= np.sqrt(A_beam[:,:,i])/beammax
+        A_beam[:,:,i] /= beammax
+        dirtymap[:,:,i] /= beammax
+        (noise[:,:,i])[A_beam[:,:,i]<beamthresh] = np.nan
+        (dirtymap[:,:,i])[A_beam[:,:,i]<beamthresh] = np.nan
+
+    return dirtymap,noise,A_beam
+
 
 def sightread(npzfile,noisefile = None,beamfile = None):
 

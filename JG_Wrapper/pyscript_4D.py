@@ -183,9 +183,6 @@ if __name__ == "__main__": ## this 'if' statement prevents this code from runnin
         dirtymap = dirtymap_simulator_wrapper (u.astype(ctypes.c_float), wavelengths.astype(ctypes.c_float), source_us, spectra, 1e-9, cp)
         dirtymap = dirtymap.reshape(imsize,imsize,len(frequencies))
 
-        dirtymap /= M**2
-        dirtymap /= N**2 ## for normalization. THIS IS IMPORTANT TO GET THE MAP BACK IN JY!
-
         t2 = time.time()
 
         print("Dirtymap simulator took", t2-t1, " seconds")
@@ -205,21 +202,7 @@ if __name__ == "__main__": ## this 'if' statement prevents this code from runnin
 
             A_beam,B_beam = rev.recover_net_beam(u, centre_phi_RA_deg, initial_phi_offset, dphi, N_times, frequencies, survey_dec, antenna_diam = ant_diam)
 
-        ### apply the normalized raw beam to my own noise:
-
-        for i in range(len(frequencies)):
-
-            noise[:,:,i] *= B_beam[:,:,i] ## maximum will be divided out later!
-
-        ## normalize the beam and dirtymap ##:
-        for i in range(len(frequencies)):
-            maxx = np.max(A_beam[:,:,i])
-            A_beam[:,:,i] /= maxx
-            dirtymap[:,:,i] /= maxx
-            noise[:,:,i] /= maxx
-            (noise[:,:,i])[A_beam[:,:,i]<0.25] = np.nan
-            (dirtymap[:,:,i])[A_beam[:,:,i]<0.25] = np.nan
-
+        dirtymap,noise,beam = rev.normalize(dirtymap,noise,A_beam,frequencies,M,N,beamthresh = 0.25)
         t4 = time.time()
         print("Generating the beam took", t4-t3, " seconds")
 
@@ -228,7 +211,7 @@ if __name__ == "__main__": ## this 'if' statement prevents this code from runnin
 
     if not os.path.exists(f"output/{foldername}"):
         os.makedirs(f"output/{foldername}")
-    rev.writetofits_4D(f'output/{foldername}/{run_name}',w,MAP,NOISE,A_beam)
+    rev.writetofits_4D(f'output/{foldername}/{run_name}',w,MAP,NOISE,beam)
 
     end_time = time.time()
 
